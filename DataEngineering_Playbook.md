@@ -1,7 +1,8 @@
 
+````markdown
 # 🧰 Data Engineering Debugging Playbook
 
-> A growing playbook of real-world data engineering issues and how I solved them — covering Docker, Airflow, dbt, Snowflake, and more.  
+> A growing playbook of real-world data engineering issues and how I solved them — covering Docker, Airflow, dbt, Snowflake, Great Expectations, and more.  
 > Built from hands-on experience with hospital pipelines, orchestrations, and production-level workflows.
 
 This is intended as both a personal reference and a collaborative guide.  
@@ -13,106 +14,106 @@ This is intended as both a personal reference and a collaborative guide.
 
 ### ❌ Issue: Airflow or dbt container not starting
 
-**Symptoms**:
-- `airflow_webserver` missing in `docker ps -a`
+**Symptoms**:  
+- `airflow_webserver` missing in `docker ps -a`  
 - `dbt` container exits immediately
 
-**Fixes**:
-- Added `airflow-init` container in `docker-compose.yml`
-- Created persistent entrypoint for dbt:
+**Fixes**:  
+- Added `airflow-init` container in `docker-compose.yml` for initialization.  
+- Created persistent entrypoint for dbt containers:  
   ```dockerfile
   ENTRYPOINT ["tail", "-f", "/dev/null"]
 ````
 
-* Ensured `webserver/scheduler` depend on `airflow-init`
+* Ensured `webserver` and `scheduler` depend on `airflow-init` container.
 
 ---
 
-### ❌ Issue: Port 8080 not accessible
+### ❌ Issue: Port 8080 not accessible on localhost
 
-**Symptom**: `localhost:8080` not loading despite container running
+**Symptom**: Airflow webserver does not load despite container running
 
 **Fix**:
 
 ```bash
-lsof -i :8080         # Find conflicting process
-kill -9 <PID>         # Kill it
+lsof -i :8080          # Find process using port
+kill -9 <PID>          # Kill conflicting process
 docker compose down --volumes --remove-orphans
 docker compose up --build
 ```
 
-✅ **Tip**: Always run `docker ps -a` and `docker logs <container>` when things go wrong.
+✅ **Tip**: Always check container logs and status:
+
+```bash
+docker ps -a
+docker logs airflow_webserver
+```
 
 ---
 
-## 📋 Environment Variables (.env)
+## 📋 Environment Variables & .env
 
-### ❌ Issue: Env vars not available in container
+### ❌ Issue: Environment variables not available inside containers
 
-**Symptom**: Python script throws `Missing env vars: SNOWFLAKE_WAREHOUSE`
+**Symptom**: Python or dbt scripts fail due to missing variables like `SNOWFLAKE_WAREHOUSE`
 
 **Fixes**:
 
-* Added `.env` file to Docker:
+* Add `.env` file to Docker compose:
 
   ```yaml
   env_file: ../.env
   ```
-* Verified inside container:
+* Verify variables inside container:
 
   ```bash
   env | grep SNOWFLAKE
   ```
-* Added Python support:
+* Load environment variables in Python scripts using `python-dotenv`:
 
   ```python
   from dotenv import load_dotenv
   load_dotenv()
   ```
 
-✅ **Tip**: Double-check `.env` filename and path before restarting.
-
 ---
 
 ## ❄️ Snowflake Connectivity
 
-### ❌ Issue: SAML/SSL connection error with `snowsql`
+### ❌ Issue: SAML or SSL connection errors with `snowsql`
 
-**Symptom**:
-
-> There was an error related to the SAML Identity Provider account parameter.
+**Symptom**: Errors related to SAML Identity Provider or invalid account string
 
 **Fix**:
 
-* Your web URL is **not** your account string!
-* Use:
+* Ensure `SNOWFLAKE_ACCOUNT` is the **full account identifier** (not URL).
+* Use command line with proper account string:
 
-  ```env
-  SNOWFLAKE_ACCOUNT=orgname-accountname
+  ```bash
   snowsql -a orgname-accountname -u username --authenticator externalbrowser
   ```
 
 ---
 
-### ❌ Issue: Schema does not exist
+### ❌ Issue: Schema does not exist error
 
-**Symptom**: SQLAlchemy throws:
-
-> `Schema 'PUBLIC' does not exist or not authorized.`
+**Symptom**: SQLAlchemy error:
+`Schema 'PUBLIC' does not exist or not authorized.`
 
 **Fix**:
 
-* Set these in `.env`:
+* Set `SNOWFLAKE_ROLE`, `SNOWFLAKE_DB`, and `SNOWFLAKE_SCHEMA` explicitly in `.env`:
 
   ```env
   SNOWFLAKE_ROLE=ACCOUNTADMIN
   SNOWFLAKE_DB=MY_DATABASE
   SNOWFLAKE_SCHEMA=PUBLIC
   ```
-* Use safe table checks:
+* Use safe table existence checks in code:
 
   ```python
   if inspector.has_table(table_name, schema=schema):
+      ...
   ```
 
 ---
@@ -123,70 +124,206 @@ docker compose up --build
 
 **Fixes**:
 
-* Added task logs and retries
-* Used:
+* Added retry logic and detailed task logs.
+* Test DAG execution locally with:
 
   ```bash
   airflow dags test <dag_id> <execution_date>
   ```
-* Checked logs in container:
+* Inspect logs inside container:
 
   ```bash
   cd /opt/airflow/logs
+  tail -f <dag_id>/<task_id>/<execution_date>/1.log
   ```
 
 ---
 
 ## 🧪 Great Expectations
 
-### ❌ Issue: Checkpoint fails with PostgreSQL
-
-**Symptom**: Errors loading `data_asset` or executing query
+### ❌ Issue: Initialization errors like `pyspark not installed` or missing dependencies
 
 **Fixes**:
 
-* Updated `checkpoint.yml` with:
+* Install required packages in Dockerfile or container environment:
 
-  * Correct `datasource_name`
-  * Valid `batch_request` or SQL `query`
-* Verified table name matches expectations
-
-✅ **Tip**: Most checkpoint failures come from misconfigured queries or identifiers.
+  ```bash
+  pip install pyspark
+  ```
+* Ensure GE config folder and files are correctly mounted and accessible in the container.
 
 ---
 
-## 📁 File Handling
+### ❌ Issue: Great Expectations datasource connection failure
 
-### ❌ Issue: CSV not found inside container
+**Symptom**: Checkpoint errors with PostgreSQL or Snowflake
 
-**Symptom**: `FileNotFoundError: /path/to/file.csv`
+**Fixes**:
+
+* Correct `datasource_name` in `checkpoint.yml`
+* Validate SQL queries and table names in batch requests
+* Ensure datasource exists and is properly registered before checkpoint runs
+
+---
+
+### ❌ Issue: Great Expectations server down or port conflicts (default port 8888)
 
 **Fix**:
 
-* Map host folder to container:
-
-  ```yaml
-  volumes:
-    - ../data:/opt/airflow/data
-  ```
-* Then verify inside container:
+* Stop all running Docker containers:
 
   ```bash
-  ls /opt/airflow/data
+  docker compose down --volumes --remove-orphans
   ```
+* Restart Docker Desktop or kill conflicting processes on port 8888:
+
+  * On Windows CMD:
+
+    ```bash
+    taskkill /PID <PID> /F
+    ```
+* Ensure Dockerfile exposes the required port(s).
 
 ---
 
-## ✅ Summary: Best Practices
+### ❌ Issue: Permission denied error writing to `data_docs/local_site`
 
-| Category      | Best Practice                                        |
-| ------------- | ---------------------------------------------------- |
-| Docker        | Always check logs and container status               |
-| Airflow       | Set proper dependencies, include `airflow-init`      |
-| dbt           | Add `tail -f` entrypoint to keep container alive     |
-| Snowflake     | Validate account string, role, and schema explicitly |
-| Env Variables | Load via `dotenv`, verify with `env`                 |
-| Debugging     | Use `lsof`, `kill`, and container logs proactively   |
+**Symptoms**:
+
+* GE validation fails with:
+  `PermissionError: [Errno 13] Permission denied: '/opt/airflow/great_expectations/uncommitted/data_docs/local_site/static'`
+
+**Root Cause**: Mounted folder owned by root, but Airflow runs as `airflow` user inside container.
+
+**Fix / Recommended Solution**:
+
+* On Windows (CMD as Admin):
+
+  ```cmd
+  icacls "path\to\great_expectations\uncommitted\data_docs\local_site" /grant Everyone:(OI)(CI)F /T
+  ```
+
+* On Linux/WSL:
+
+  ```bash
+  sudo chown -R 50000:0 path/to/great_expectations/uncommitted/data_docs/local_site
+  sudo chmod -R 775 path/to/great_expectations/uncommitted/data_docs/local_site
+  ```
+
+* Or fix inside container as root user:
+
+  ```bash
+  docker exec -it --user root airflow_webserver bash
+  rm -rf /opt/airflow/great_expectations/uncommitted/data_docs/local_site
+  mkdir -p /opt/airflow/great_expectations/uncommitted/data_docs/local_site
+  chown -R airflow:root /opt/airflow/great_expectations/uncommitted/data_docs/local_site
+  chmod -R 775 /opt/airflow/great_expectations/uncommitted/data_docs/local_site
+  ```
+
+* Restart Airflow containers after fixing permissions.
+
+---
+
+## 📦 dbt Task Failures
+
+### ❌ Issue: `dbt: command not found` or Permission errors on `/opt/dbt`
+
+**Symptoms**:
+
+* Airflow logs show `/usr/bin/bash: line 1: dbt: command not found`
+* Permission denied errors on `/opt/dbt/logs/dbt.log` or `/opt/dbt/target/manifest.json`
+
+**Root Cause**:
+
+* dbt CLI not installed or PATH not set inside container
+* Permission mismatch on mounted `/opt/dbt` volume
+
+**Fixes**:
+
+* Exec into airflow container as root:
+
+  ```bash
+  docker exec -it --user root airflow_webserver bash
+  ```
+
+* Fix ownership and permissions:
+
+  ```bash
+  chown -R airflow:root /opt/dbt
+  chmod -R 775 /opt/dbt
+  ```
+
+* Optionally, modify Dockerfile to include entrypoint script fixing permissions automatically:
+
+  ```bash
+  # entrypoint.sh
+  chown -R airflow:root /opt/dbt
+  chmod -R 775 /opt/dbt
+  exec /entrypoint "$@"
+  ```
+
+* Update Dockerfile:
+
+  ```dockerfile
+  COPY entrypoint.sh /entrypoint.sh
+  RUN chmod +x /entrypoint.sh
+  ENTRYPOINT ["/entrypoint.sh"]
+  CMD ["webserver"]
+  ```
+
+* Or override command in `docker-compose.yml` to fix permissions before start:
+
+  ```yaml
+  command: >
+    bash -c "chown -R airflow:root /opt/dbt && chmod -R 775 /opt/dbt && airflow webserver"
+  ```
+
+* Restart Airflow containers after permission fixes.
+
+---
+
+## ✉️ SMTP / Email Setup in Airflow
+
+### ❌ Issue: SMTP Authentication errors (e.g., Gmail `Application-specific password required`)
+
+**Cause**: Gmail requires app-specific password when 2FA is enabled.
+
+**Fixes**:
+
+* Generate an **App Password** in your Google Account security settings:
+
+  * Go to [https://myaccount.google.com/security](https://myaccount.google.com/security)
+  * Under "Signing in to Google", select "App passwords"
+  * Generate a password for "Mail" and device "Other" (e.g., "Airflow")
+
+* Update Airflow SMTP connection to use this app password instead of your normal Gmail password.
+
+### Update Airflow SMTP config (in `airflow.cfg` or connection settings)
+
+```ini
+[smtp]
+smtp_host = smtp.gmail.com
+smtp_user = your_email@gmail.com
+smtp_password = your_app_password_here  # Use the app password generated above
+smtp_port = 587
+smtp_starttls = True
+smtp_ssl = False
+```
+
+* Alternatively, configure SMTP connection in Airflow UI (`Admin > Connections`) with this info.
+
+---
+
+## 🛠️ Summary of Best Practices for Bug Fixes
+
+| Category           | Best Practice                                                                                          |
+| ------------------ | ------------------------------------------------------------------------------------------------------ |
+| Docker             | Use `docker-compose down --volumes --remove-orphans` before restart; fix volume mounts and permissions |
+| Airflow            | Use `airflow dags test` for local DAG testing; check logs frequently                                   |
+| dbt                | Fix permissions on mounted volumes; ensure dbt CLI is installed and PATH set                           |
+| Great Expectations | Correct datasource config and batch requests; fix permission errors on docs output                     |
+| Snowflake          | Use correct account identifiers; explicitly set role, database, schema                                 |
+| Email              | Use Gmail app password for SMTP authentication with 2FA enabled                                        |
 
 ---
 
@@ -202,7 +339,11 @@ Let’s build a better data engineering troubleshooting guide — together. 🛠
 
 ---
 
-✉️ **Ping me** if you’d like to co-author or share ideas: *\[your-email-or-link]*
+✉️ **Ping me** if you’d like to co-author or share ideas: ]*
 
+```
 
+---
 
+If you want me to create this file in your repo folder or help with a pull request, just say so!
+```
