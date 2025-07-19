@@ -339,11 +339,4 @@ Let’s build a better data engineering troubleshooting guide — together. 🛠
 
 ---
 
-✉️ **Ping me** if you’d like to co-author or share ideas: ]*
-
-```
-
----
-
-If you want me to create this file in your repo folder or help with a pull request, just say so!
-```
+✉️ **Ping me** if you’d like to co-author""
